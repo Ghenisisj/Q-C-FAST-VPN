@@ -41,6 +41,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.animation.PathInterpolator
 import android.view.inputmethod.EditorInfo
+import android.widget.ArrayAdapter
 import android.widget.BaseAdapter
 import android.widget.FrameLayout
 import android.widget.CheckBox
@@ -70,6 +71,7 @@ import com.google.android.material.chip.ChipGroup
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.tabs.TabLayout
+import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
 import com.google.zxing.integration.android.IntentIntegrator
@@ -164,6 +166,7 @@ class MainActivity : Activity() {
     private var connectionChainCompatibilityMessage: String? = null
     private var pendingConnectionChainAccessibilityAnnouncement: String? = null
     private var openConnectionChainSettingsPage: (() -> Unit)? = null
+    private var openFragmentSettingsPage: (() -> Unit)? = null
     private var advancedSettingsBackAction: (() -> Unit)? = null
     private var sessionStartedAtElapsedMs: Long = 0L
     private var connectFlowPending: Boolean = false
@@ -195,6 +198,7 @@ class MainActivity : Activity() {
     private lateinit var homeChainAfterSelectorRow: DashboardDataRowView
     private lateinit var homeChainSelectorRows: LinearLayout
     private lateinit var homeSubscriptionSelectorRow: DashboardDataRowView
+    private lateinit var homeFragmentSelectorRow: DashboardDataRowView
     private lateinit var settingsSubscriptionSelectorRow: DashboardDataRowView
     private var updateSplitTunnelControlsEnabled: ((Boolean) -> Unit)? = null
     private lateinit var connectionModeGroup: MaterialButtonToggleGroup
@@ -205,6 +209,16 @@ class MainActivity : Activity() {
     private lateinit var dashboardConnectionMetadataSection: View
     private lateinit var tlsIntegrityCheckbox: MaterialSwitch
     private lateinit var alwaysOnStatusText: TextView
+    private lateinit var fragmentEnabledCheckbox: MaterialSwitch
+    private lateinit var fragmentSettingsFields: LinearLayout
+    private lateinit var fragmentSuggestionInput: MaterialAutoCompleteTextView
+    private lateinit var fragmentCustomisedText: TextView
+    private lateinit var fragmentJsonInput: EditText
+    private lateinit var fragmentAlpnInput: EditText
+    private lateinit var fragmentCipherSuitesInput: EditText
+    private lateinit var fragmentApplyButton: MaterialButton
+    private lateinit var fragmentResetButton: MaterialButton
+    private lateinit var fragmentErrorText: TextView
     private lateinit var amneziaNoiseCheckbox: MaterialSwitch
     private lateinit var amneziaNoiseFields: LinearLayout
     private lateinit var amneziaNoiseCountInput: EditText
@@ -1844,6 +1858,11 @@ class MainActivity : Activity() {
             )
             setOnRowClickListener { showSubscriptionSelectorMenu(this) }
         }
+        homeFragmentSelectorRow = DashboardDataRowView(this).apply {
+            setRow(getString(R.string.fragments_section), "")
+            setOnRowClickListener { openFragmentSettingsFromHome() }
+        }
+        renderHomeFragmentRow()
         dashboardConnectionMetadataSection = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
@@ -1897,6 +1916,14 @@ class MainActivity : Activity() {
                     marginEnd = dp(18)
                 })
             addView(homeSubscriptionSelectorRow, LinearLayout.LayoutParams(-1, -2))
+            addView(
+                View(this@MainActivity).apply { setBackgroundColor(withAlpha(OUTLINE, 150)) },
+                LinearLayout.LayoutParams(-1, dp(1)).apply {
+                    marginStart = dp(18)
+                    marginEnd = dp(18)
+                },
+            )
+            addView(homeFragmentSelectorRow, LinearLayout.LayoutParams(-1, -2))
             addView(dashboardConnectionMetadataSection, LinearLayout.LayoutParams(-1, -2))
         }
         val dataRows = dataRowsList
@@ -2157,6 +2184,151 @@ class MainActivity : Activity() {
         )
         connectionSettings.addView(
             tlsIntegrityPanel,
+            LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) },
+        )
+        val fragmentSectionLabel = advancedSectionLabel(getString(R.string.fragments_section))
+        connectionSettings.addView(
+            fragmentSectionLabel,
+            LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(24) },
+        )
+        val fragmentPanel = advancedSettingsPanel()
+        fragmentEnabledCheckbox = MaterialSwitch(this).apply {
+            isChecked = connectionOptionsPreferenceStore.read().fragments.enabled
+            contentDescription = getString(R.string.fragments_enable)
+            setOnClickListener { saveFragmentsEnabled(isChecked) }
+        }
+        fragmentPanel.addView(
+            advancedToggleRow(
+                title = getString(R.string.fragments_title),
+                detail = getString(R.string.fragments_description),
+                toggle = fragmentEnabledCheckbox,
+            ),
+            LinearLayout.LayoutParams(-1, -2),
+        )
+
+        fun fragmentInput(
+            title: String,
+            helper: String,
+            minLines: Int,
+        ): Pair<EditText, TextInputLayout> {
+            val input = TextInputEditText(this).apply {
+                gravity = Gravity.TOP or Gravity.START
+                layoutDirection = View.LAYOUT_DIRECTION_LTR
+                textDirection = View.TEXT_DIRECTION_LTR
+                background = null
+                textSize = 13f
+                typeface = Typeface.MONOSPACE
+                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                    InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+                setMinLines(minLines)
+                maxLines = if (minLines > 3) 18 else 6
+                isHorizontalScrollBarEnabled = false
+                setTextColor(TEXT_PRIMARY)
+            }
+            return input to TextInputLayout(this).apply {
+                hint = title
+                helperText = helper
+                boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
+                boxBackgroundColor = withAlpha(SURFACE, if (palette.isDark) 232 else 246)
+                boxStrokeColor = TEAL
+                boxStrokeWidth = dp(1)
+                boxStrokeWidthFocused = dp(1)
+                defaultHintTextColor = ColorStateList.valueOf(TEXT_SECONDARY)
+                setHelperTextColor(ColorStateList.valueOf(TEXT_SECONDARY))
+                setBoxCornerRadii(dp(8).toFloat(), dp(8).toFloat(), dp(8).toFloat(), dp(8).toFloat())
+                addView(input)
+            }
+        }
+
+        val suggestionLabels = MihomoConnectionOptionsPolicy.FRAGMENT_SUGGESTIONS.indices.map { index ->
+            getString(R.string.fragments_suggestion_item, index + 1)
+        }
+        fragmentCustomisedText = TextView(this).apply {
+            text = getString(R.string.fragments_customised)
+            textSize = 12f
+            setTextColor(TEXT_SECONDARY)
+            visibility = View.GONE
+        }
+        fragmentSuggestionInput = MaterialAutoCompleteTextView(this).apply {
+            inputType = InputType.TYPE_NULL
+            setSingleLine(true)
+            setTextColor(TEXT_PRIMARY)
+            setAdapter(
+                ArrayAdapter(
+                    this@MainActivity,
+                    android.R.layout.simple_dropdown_item_1line,
+                    suggestionLabels,
+                ),
+            )
+            setOnItemClickListener { _, _, position, _ -> selectFragmentSuggestion(position) }
+        }
+        val suggestionLayout = TextInputLayout(this).apply {
+            hint = getString(R.string.fragments_suggestions)
+            boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
+            boxBackgroundColor = withAlpha(SURFACE, if (palette.isDark) 232 else 246)
+            boxStrokeColor = TEAL
+            endIconMode = TextInputLayout.END_ICON_DROPDOWN_MENU
+            addView(fragmentSuggestionInput)
+        }
+        val (jsonInput, jsonLayout) = fragmentInput(
+            getString(R.string.fragments_json_title),
+            getString(R.string.fragments_json_guide),
+            minLines = 10,
+        )
+        fragmentJsonInput = jsonInput
+        fragmentJsonInput.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(value: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(value: CharSequence?, start: Int, before: Int, count: Int) {
+                updateFragmentSuggestionState(value?.toString().orEmpty())
+            }
+            override fun afterTextChanged(value: Editable?) = Unit
+        })
+        val (alpnInput, alpnLayout) = fragmentInput(
+            getString(R.string.fragments_alpn_title),
+            getString(R.string.fragments_alpn_guide),
+            minLines = 1,
+        )
+        fragmentAlpnInput = alpnInput
+        val (cipherInput, cipherLayout) = fragmentInput(
+            getString(R.string.fragments_cipher_title),
+            getString(R.string.fragments_cipher_guide),
+            minLines = 4,
+        )
+        fragmentCipherSuitesInput = cipherInput
+        fragmentApplyButton = MaterialButton(this).apply {
+            text = getString(R.string.fragments_validate_apply)
+            setOnClickListener { applyFragmentSettings() }
+        }
+        fragmentResetButton = MaterialButton(
+            ContextThemeWrapper(this, com.google.android.material.R.style.Widget_Material3_Button_OutlinedButton),
+        ).apply {
+            text = getString(R.string.fragments_restore_default)
+            setOnClickListener { restoreDefaultFragments() }
+        }
+        val fragmentButtons = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(fragmentApplyButton, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(fragmentResetButton, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(8) })
+        }
+        fragmentErrorText = TextView(this).apply {
+            textSize = 12f
+            setTextColor(ERROR)
+            visibility = View.GONE
+        }
+        fragmentSettingsFields = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(4), dp(12), dp(12))
+            addView(fragmentCustomisedText, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+            addView(suggestionLayout, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+            addView(jsonLayout, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+            addView(alpnLayout, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+            addView(cipherLayout, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+            addView(fragmentButtons, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+            addView(fragmentErrorText, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+        }
+        fragmentPanel.addView(fragmentSettingsFields, LinearLayout.LayoutParams(-1, -2))
+        connectionSettings.addView(
+            fragmentPanel,
             LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) },
         )
         connectionSettings.addView(
@@ -3115,6 +3287,15 @@ class MainActivity : Activity() {
             R.string.settings_category_connections_detail,
             connectionSettings,
         )
+        openFragmentSettingsPage = {
+            showCategory(R.string.settings_category_connections, connectionSettings)
+            scrollView.post {
+                scrollView.scrollTo(
+                    0,
+                    (connectionSettings.top + fragmentSectionLabel.top - dp(12)).coerceAtLeast(0),
+                )
+            }
+        }
         openConnectionChainSettingsPage = {
             showCategory(R.string.connection_chain_title, chainSettings)
         }
@@ -3686,6 +3867,11 @@ class MainActivity : Activity() {
     private fun openConnectionChainSettingsFromHome() {
         appTabs.getTabAt(0)?.select()
         openConnectionChainSettingsPage?.invoke()
+    }
+
+    private fun openFragmentSettingsFromHome() {
+        appTabs.getTabAt(0)?.select()
+        openFragmentSettingsPage?.invoke()
     }
 
     private fun cachedConnectionChainPickerOptions(
@@ -5588,6 +5774,24 @@ class MainActivity : Activity() {
         connectionSelectorRow.setValue(value)
         connectionSelectorRow.contentDescription = getString(R.string.connection_content_description, value)
         renderHomeConnectionRows()
+        renderHomeFragmentRow()
+    }
+
+    private fun renderHomeFragmentRow() {
+        if (!::homeFragmentSelectorRow.isInitialized) return
+        val value = getString(
+            if (connectionOptionsPreferenceStore.read().fragments.enabled) {
+                R.string.fragments_home_on
+            } else {
+                R.string.fragments_home_off
+            },
+        )
+        homeFragmentSelectorRow.setValue(value)
+        homeFragmentSelectorRow.contentDescription = getString(
+            R.string.settings_value_content_description,
+            getString(R.string.fragments_section),
+            value,
+        )
     }
 
     private fun renderHomeConnectionRows() {
@@ -6563,6 +6767,78 @@ class MainActivity : Activity() {
         return getString(R.string.lan_sharing_details, localEndpoint, lanEndpoints)
     }
 
+    private fun saveFragmentsEnabled(enabled: Boolean) {
+        val previous = connectionOptionsPreferenceStore.read().fragments
+        val settings = if (!enabled) {
+            previous.copy(enabled = false)
+        } else {
+            runCatching { readFragmentInputs(enabled = true) }.getOrElse { error ->
+                fragmentEnabledCheckbox.isChecked = previous.enabled
+                showFragmentError(error)
+                return
+            }
+        }
+        connectionOptionsPreferenceStore.saveFragments(settings)
+        if (!enabled) fragmentErrorText.visibility = View.GONE
+        renderConnectionOptionsControls(settingsEnabled = true)
+        if (previous != settings && (previous.enabled || settings.enabled)) reconnectForConnectionOptionChange()
+    }
+
+    private fun applyFragmentSettings() {
+        val previous = connectionOptionsPreferenceStore.read().fragments
+        val settings = runCatching { readFragmentInputs() }.getOrElse { error ->
+            showFragmentError(error)
+            return
+        }
+        connectionOptionsPreferenceStore.saveFragments(settings)
+        fragmentJsonInput.setText(settings.rawJson)
+        fragmentErrorText.visibility = View.GONE
+        Toast.makeText(this, R.string.fragments_valid, Toast.LENGTH_SHORT).show()
+        if (previous != settings && (previous.enabled || settings.enabled)) reconnectForConnectionOptionChange()
+    }
+
+    private fun restoreDefaultFragments() {
+        val defaults = MihomoConnectionOptionsPolicy.DEFAULT_FRAGMENTS
+        fragmentJsonInput.setText(defaults.rawJson)
+        fragmentAlpnInput.setText(defaults.alpn)
+        fragmentCipherSuitesInput.setText(defaults.cipherSuites)
+        applyFragmentSettings()
+    }
+
+    private fun readFragmentInputs(
+        enabled: Boolean = fragmentEnabledCheckbox.isChecked,
+    ): FragmentSettings = MihomoConnectionOptionsPolicy.validateFragments(
+        FragmentSettings(
+            enabled = enabled,
+            safe = true,
+            rawJson = fragmentJsonInput.text.toString(),
+            alpn = fragmentAlpnInput.text.toString(),
+            cipherSuites = fragmentCipherSuitesInput.text.toString(),
+        ),
+    )
+
+    private fun selectFragmentSuggestion(index: Int) {
+        val suggestion = MihomoConnectionOptionsPolicy.FRAGMENT_SUGGESTIONS.getOrNull(index) ?: return
+        fragmentJsonInput.setText(MihomoConnectionOptionsPolicy.parseFragmentJson(suggestion).formattedJson)
+        fragmentErrorText.visibility = View.GONE
+    }
+
+    private fun updateFragmentSuggestionState(rawJson: String) {
+        val index = MihomoConnectionOptionsPolicy.fragmentSuggestionIndex(rawJson)
+        if (index != null) {
+            fragmentSuggestionInput.setText(getString(R.string.fragments_suggestion_item, index + 1), false)
+        }
+        fragmentCustomisedText.visibility = if (index == null) View.VISIBLE else View.GONE
+    }
+
+    private fun showFragmentError(error: Throwable) {
+        fragmentErrorText.text = getString(
+            R.string.fragments_invalid,
+            error.message ?: getString(R.string.fragments_invalid_unknown),
+        )
+        fragmentErrorText.visibility = View.VISIBLE
+    }
+
     private fun saveAmneziaNoiseEnabled(enabled: Boolean) {
         val previous = connectionOptionsPreferenceStore.read()
         val settings = if (enabled) {
@@ -6664,6 +6940,20 @@ class MainActivity : Activity() {
     private fun renderConnectionOptionsControls(settingsEnabled: Boolean) {
         if (!::amneziaNoiseCheckbox.isInitialized) return
         val options = connectionOptionsPreferenceStore.read()
+        fragmentEnabledCheckbox.isChecked = options.fragments.enabled
+        fragmentEnabledCheckbox.isEnabled = settingsEnabled
+        fragmentSuggestionInput.isEnabled = settingsEnabled
+        listOf(fragmentJsonInput, fragmentAlpnInput, fragmentCipherSuitesInput).forEach {
+            it.isEnabled = settingsEnabled
+        }
+        fragmentApplyButton.isEnabled = settingsEnabled
+        fragmentResetButton.isEnabled = settingsEnabled
+        fragmentSettingsFields.alpha = if (settingsEnabled) 1f else 0.45f
+        if (!fragmentJsonInput.hasFocus()) fragmentJsonInput.setText(options.fragments.rawJson)
+        if (!fragmentAlpnInput.hasFocus()) fragmentAlpnInput.setText(options.fragments.alpn)
+        if (!fragmentCipherSuitesInput.hasFocus()) {
+            fragmentCipherSuitesInput.setText(options.fragments.cipherSuites)
+        }
         amneziaNoiseCheckbox.isChecked = options.amneziaNoiseEnabled
         amneziaNoiseCheckbox.isEnabled = settingsEnabled
         val noiseFieldsEnabled = settingsEnabled && options.amneziaNoiseEnabled
